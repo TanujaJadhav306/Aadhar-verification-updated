@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     # Frame processing
     FRAME_PROCESSING_INTERVAL: int = 1  # Process every Nth frame
     
+    # Database settings
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "amp_talent_iq"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str = "root"
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
