@@ -15,6 +15,16 @@ from services.opencv_sface import (
     face_feature,
     pick_largest_face_index,
 )
+import os
+import cv2
+import numpy as np
+
+# Ensure uploads directory exists - Pointing to Backend Service Uploads
+# Path: ../../../AmpTalentIQ-backend/amptalentiq-api/uploads/verification
+# We use absolute path to ensure it works regardless of CWD
+BACKEND_UPLOADS_DIR = r"c:\Users\tanuja.jadhav\OneDrive - Ampcus Tech Pvt Ltd\Desktop\AmpTalentIQ\AmpTalentIQ-backend\amptalentiq-api\uploads\verification"
+UPLOAD_DIR = BACKEND_UPLOADS_DIR
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter()
 
@@ -33,13 +43,43 @@ async def liveness(file: UploadFile = File(...)) -> dict:
 
 
 @router.post("/face-verification/detect")
-async def detect(file: UploadFile = File(...), score_threshold: float = 0.6) -> dict:
+async def detect(
+    file: UploadFile = File(...), 
+    score_threshold: float = 0.6,
+    candidateExamId: str = Form(...),
+    imageType: str = Form("candidate"),
+    candidateName: str | None = Form(default=None)
+) -> dict:
     """
     Face detection only (for UI feedback).
     Returns detected face boxes and scores.
     """
     try:
-        img = decode_image(await file.read())
+        contents = await file.read()
+        img = decode_image(contents)
+        
+        # Save image
+        if candidateExamId:
+            # Create subfolder for candidate
+            candidate_dir = os.path.join(UPLOAD_DIR, str(candidateExamId))
+            os.makedirs(candidate_dir, exist_ok=True)
+            
+            # Generate filename with timestamp and candidate name
+            import time
+            timestamp = int(time.time())
+            
+            # Sanitize candidate name
+            safe_name = "candidate"
+            if candidateName:
+                # Remove special characters and spaces
+                safe_name = "".join(c for c in candidateName if c.isalnum() or c in ('-', '_'))
+            
+            filename = f"{imageType}-{safe_name}-{timestamp}.jpg"
+            filepath = os.path.join(candidate_dir, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(contents)
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -57,23 +97,62 @@ async def detect(file: UploadFile = File(...), score_threshold: float = 0.6) -> 
             }
         )
 
-    return {"ok": True, "faceCount": len(infos), "boxes": boxes}
+    return {
+        "ok": True, 
+        "faceCount": len(infos), 
+        "boxes": boxes,
+        "candidateExamId": candidateExamId
+    }
 
 
 @router.post("/face-verification/verify")
 async def verify(
     document: UploadFile = File(...),
     selfie: UploadFile = File(...),
+    candidateExamId: str = Form(...),
     threshold: float = 0.363,
     run_liveness: bool = True,
+    candidateName: str | None = Form(default=None),
 ) -> dict:
     """
     Face verification endpoint.
     Compares a face from a document (Aadhaar/PAN/DL) with a selfie.
     """
     try:
-        doc_img = decode_image(await document.read())
-        selfie_img = decode_image(await selfie.read())
+        doc_content = await document.read()
+        selfie_content = await selfie.read()
+        
+        doc_img = decode_image(doc_content)
+        selfie_img = decode_image(selfie_content)
+        
+        # Save images
+        if candidateExamId:
+            # Create subfolder for candidate
+            candidate_dir = os.path.join(UPLOAD_DIR, str(candidateExamId))
+            os.makedirs(candidate_dir, exist_ok=True)
+
+            # Generate filename with timestamp and candidate name
+            import time
+            timestamp = int(time.time())
+            
+            # Sanitize candidate name
+            safe_name = "candidate"
+            if candidateName:
+                # Remove special characters and spaces
+                safe_name = "".join(c for c in candidateName if c.isalnum() or c in ('-', '_'))
+
+            # Save Document Image
+            doc_filename = f"document-{safe_name}-{timestamp}.jpg"
+            doc_filepath = os.path.join(candidate_dir, doc_filename)
+            with open(doc_filepath, "wb") as f:
+                f.write(doc_content)
+                
+            # Save Candidate Image (Selfie)
+            selfie_filename = f"candidate-{safe_name}-{timestamp}.jpg"
+            selfie_filepath = os.path.join(candidate_dir, selfie_filename)
+            with open(selfie_filepath, "wb") as f:
+                f.write(selfie_content)
+            
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -107,6 +186,9 @@ async def verify(
 
     liveness_result = basic_liveness(selfie_img) if run_liveness else None
 
+    # Connect and update database
+    update_candidate_verification_in_db(candidateExamId, is_match, match_percent)
+
     return {
         "ok": True,
         "engine": "OpenCV YuNet + SFace (opencv_zoo ONNX)",
@@ -114,6 +196,7 @@ async def verify(
         "threshold": float(threshold),
         "isMatch": bool(is_match),
         "matchPercent": match_percent,
+        "candidateExamId": candidateExamId,
         "faces": {
             "documentFaceCount": len(doc_used_infos),
             "selfieFaceCount": len(selfie_infos),
@@ -122,6 +205,23 @@ async def verify(
         "liveness": liveness_result,
         "note": "For production, use a real liveness/anti-spoof model + audited thresholds.",
     }
+
+
+def update_candidate_verification_in_db(candidate_exam_id, is_match, match_percent):
+    """Update candidate verification status in PostgreSQL"""
+    try:
+        from services.database_service import DatabaseService
+        query = """
+            UPDATE "exams-candidate"
+            SET "isVerification" = %s, "matchPercent" = %s
+            WHERE id = %s
+        """
+        affected = DatabaseService.execute_query(query, (is_match, match_percent, candidate_exam_id))
+        print(f"Database updated for candidate {candidate_exam_id}: {affected} rows affected.")
+        return True
+    except Exception as e:
+        print(f"Failed to update database: {e}")
+        return False
 
 
 @router.post("/face-verification/verify-single")
