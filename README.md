@@ -11,6 +11,9 @@ TODO: Guide users through getting your code up and running on their own system. 
 # Build and Test
 TODO: Describe and show how to build your code and run the tests. 
 
+#Add verification folder under the upload folder and add the path in face_verification.py
+#Changes the backend upload directory path 
+
 # Contribute
 TODO: Explain how other users and developers can contribute to make your code better. 
 
