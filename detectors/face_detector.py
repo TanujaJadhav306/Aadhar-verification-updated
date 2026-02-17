@@ -6,15 +6,18 @@ Detects face, tracks head pose, and estimates eye gaze
 import cv2
 import numpy as np
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 from typing import Optional, Tuple, Dict
 import logging
 import math
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class FaceDetector:
-    """MediaPipe-based face detection and head pose estimation"""
+    """MediaPipe Tasks-based face detection and head pose estimation"""
     
     def __init__(
         self,
@@ -22,7 +25,7 @@ class FaceDetector:
         min_tracking_confidence: float = 0.5
     ):
         """
-        Initialize MediaPipe face detector
+        Initialize MediaPipe face landmarker
         
         Args:
             min_detection_confidence: Minimum confidence for face detection
@@ -31,16 +34,22 @@ class FaceDetector:
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
         
-        # Initialize MediaPipe Face Mesh
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence
+        # Initialize MediaPipe Face Landmarker
+        model_path = os.path.join(os.getcwd(), 'models', 'face_landmarker.task')
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"MediaPipe model file not found at {model_path}. Please download it first.")
+
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
+            num_faces=1,
+            min_face_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+            running_mode=vision.RunningMode.IMAGE
         )
+        self.landmarker = vision.FaceLandmarker.create_from_options(options)
         
         # Face mesh indices for key points
         # Nose tip, chin, left eye, right eye, left mouth, right mouth
@@ -54,7 +63,7 @@ class FaceDetector:
             'forehead': 10
         }
         
-        logger.info("MediaPipe Face Mesh initialized")
+        logger.info("MediaPipe Face Landmarker initialized")
     
     def detect_face(self, frame: np.ndarray) -> Tuple[bool, Optional[Dict]]:
         """
@@ -71,67 +80,44 @@ class FaceDetector:
             logger.warning("Empty or None frame passed to detect_face")
             return False, None
         
-        logger.debug(f"Face detection: frame shape={frame.shape}, dtype={frame.dtype}, min={frame.min()}, max={frame.max()}")
-        
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         
         # Process frame
-        results = self.face_mesh.process(rgb_frame)
+        # Running mode is IMAGE, so we use detect()
+        results = self.landmarker.detect(mp_image)
         
-        if not results.multi_face_landmarks:
-            logger.info(f"❌ No face landmarks detected by MediaPipe")
-            logger.info(f"   Frame shape: {frame.shape}")
-            logger.info(f"   Frame dtype: {frame.dtype}")
-            logger.info(f"   Frame min/max: {frame.min()}/{frame.max()}")
-            logger.info(f"   Results object: {type(results)}")
-            logger.info(f"   Has multi_face_landmarks: {hasattr(results, 'multi_face_landmarks')}")
+        if not results.face_landmarks:
+            logger.info(f"❌ No face landmarks detected by MediaPipe Tasks")
             return False, None
         
         # Get first face (assuming single face)
-        face_landmarks = results.multi_face_landmarks[0]
-        logger.info(f"✅ MediaPipe detected face landmarks: {len(face_landmarks.landmark)}")
+        # Results structure: face_landmarks is a list of lists of landmarks
+        face_landmarks_list = results.face_landmarks[0]
         
-        # Additional validation: Check if detected face is reasonable
-        # MediaPipe can sometimes detect false positives (like hands, objects covering camera)
         h, w = frame.shape[:2]
-        logger.info(f"   Frame dimensions: {w}x{h}")
-        
-        # Check if we have enough landmarks (should be 468 for full face mesh)
-        # Reduced threshold from 100 to 50 to be less strict
-        landmark_count = len(face_landmarks.landmark)
-        if landmark_count < 50:
-            logger.info(f"❌ Too few landmarks detected: {landmark_count} (min: 50)")
-            return False, None
-        logger.info(f"   Landmark count OK: {landmark_count}")
         
         # Calculate bounding box to validate size
-        x_coords = [lm.x for lm in face_landmarks.landmark]
-        y_coords = [lm.y for lm in face_landmarks.landmark]
+        x_coords = [lm.x for lm in face_landmarks_list]
+        y_coords = [lm.y for lm in face_landmarks_list]
         
         face_width = (max(x_coords) - min(x_coords)) * w
         face_height = (max(y_coords) - min(y_coords)) * h
         
-        # Face should be at least 30x30 pixels to be considered valid (reduced from 50x50)
-        logger.info(f"   Face dimensions: {face_width:.1f}x{face_height:.1f} pixels")
         if face_width < 30 or face_height < 30:
             logger.info(f"❌ Face too small: {face_width:.1f}x{face_height:.1f} pixels (min: 30x30)")
             return False, None
-        logger.info(f"   Face size OK: {face_width:.1f}x{face_height:.1f}")
         
-        # Additional check: If face covers too much of the frame, might be hand/object covering camera
         face_area_ratio = (face_width * face_height) / (w * h)
-        logger.info(f"   Face area ratio: {face_area_ratio:.2%}")
-        if face_area_ratio > 0.85:  # Face shouldn't cover more than 85% of frame (increased from 80%)
+        if face_area_ratio > 0.85:
             logger.info(f"❌ Face area too large ({face_area_ratio:.2%}), might be hand/object covering camera")
             return False, None
-        logger.info(f"   Face area ratio OK: {face_area_ratio:.2%}")
         
         # Extract key points
         landmarks = {}
-        
         for name, idx in self.face_landmarks_indices.items():
-            landmark = face_landmarks.landmark[idx]
+            landmark = face_landmarks_list[idx]
             landmarks[name] = {
                 'x': int(landmark.x * w),
                 'y': int(landmark.y * h),
@@ -146,16 +132,17 @@ class FaceDetector:
             'y_max': int(max(y_coords) * h)
         }
         
+        # For compatibility with downstream logic that might expect the old landmark objects
+        # we'll store the new landmarks list
         face_data = {
             'landmarks': landmarks,
             'bbox': bbox,
-            'all_landmarks': face_landmarks
+            'all_landmarks_list': face_landmarks_list,
+            # Placeholder for old landmark object structure if needed
+            'all_landmarks': type('obj', (object,), {'landmark': face_landmarks_list})
         }
         
-        logger.info(f"✅ VALID FACE DETECTED")
-        logger.info(f"   Dimensions: {face_width:.1f}x{face_height:.1f} pixels")
-        logger.info(f"   Area ratio: {face_area_ratio:.2%}")
-        logger.info(f"   Bbox: {face_data['bbox']}")
+        logger.info(f"✅ VALID FACE DETECTED (Tasks API)")
         return True, face_data
     
     def estimate_head_pose(self, face_data: Dict) -> Dict[str, float]:
@@ -292,5 +279,5 @@ class FaceDetector:
     
     def cleanup(self):
         """Cleanup resources"""
-        if hasattr(self, 'face_mesh'):
-            self.face_mesh.close()
+        if hasattr(self, 'landmarker'):
+            self.landmarker.close()
