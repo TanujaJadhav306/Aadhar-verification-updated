@@ -2,6 +2,7 @@ services:
   - type: web
     name: amptalentiq-proc
     env: python
+    plan: free # Explicitly request the free tier
     # We use the native python environment
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
