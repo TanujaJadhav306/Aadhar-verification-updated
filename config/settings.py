@@ -74,17 +74,17 @@ class Settings(BaseSettings):
     FRAME_PROCESSING_INTERVAL: int = 1  # Process every Nth frame
     
     # Database settings
-    DB_HOST: str = "172.22.1.20"
-    DB_PORT: int = 5432
-    DB_USER: str = "tiqdbadmin"
-    DB_PASSWORD: str = "T!@dbadm1n"
-    DB_NAME: str = "talentiqdb"
-
-    # DB_HOST: str = "localhost"
+    # DB_HOST: str = "172.22.1.20"
     # DB_PORT: int = 5432
-    # DB_NAME: str = "amp_talent_iq"
-    # DB_USER: str = "postgres"
-    # DB_PASSWORD: str = "root"
+    # DB_USER: str = "tiqdbadmin"
+    # DB_PASSWORD: str = "T!@dbadm1n"
+    # DB_NAME: str = "talentiqdb"
+
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "amp_talent_iq"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str = "root"
     
     class Config:
         env_file = ".env"
